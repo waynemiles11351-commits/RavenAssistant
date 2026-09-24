@@ -1,0 +1,123 @@
+name: Raven Assistant iOS Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show Xcode
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Find and unpack project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP="$(find . -maxdepth 2 -type f -name 'RavenAssistant_Native_v4_11_AutoVision*.zip' -print -quit)"
+
+          if [[ -z "$ZIP" ]]; then
+            echo "RavenAssistant ZIP not found."
+            exit 1
+          fi
+
+          rm -rf project
+          mkdir project
+
+          unzip -q "$ZIP" -d project
+
+          PROJECT="$(find project -name RavenAssistant.xcodeproj -type d -print -quit)"
+
+          if [[ -z "$PROJECT" ]]; then
+            echo "RavenAssistant.xcodeproj not found."
+            exit 1
+          fi
+
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          echo "Project: $PROJECT"
+
+      - name: Build for iPhone simulator
+        run: |
+          set -euo pipefail
+
+          rm -rf build-simulator
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -target RavenAssistant \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -derivedDataPath build-simulator \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Build for iPhone device
+        run: |
+          set -euo pipefail
+
+          rm -rf build-device
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -target RavenAssistant \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build-device \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Verify Live Activity extension
+        run: |
+          set -euo pipefail
+
+          APP="$(find build-device -type d -name 'RavenAssistant.app' -print -quit)"
+
+          if [[ -z "$APP" ]]; then
+            echo "RavenAssistant.app not found."
+            exit 1
+          fi
+
+          test -d "$APP/PlugIns/RavenAssistantWidget.appex"
+
+          echo "Live Activity extension embedded successfully."
+
+      - name: Package artifacts
+        run: |
+          set -euo pipefail
+
+          mkdir -p artifacts
+
+          APP="$(find build-device -type d -name 'RavenAssistant.app' -print -quit)"
+
+          ditto -c -k \
+            --sequesterRsrc \
+            --keepParent \
+            "$APP" \
+            artifacts/RavenAssistant-device-unsigned.zip
+
+          SIM="$(find build-simulator -type d -name 'RavenAssistant.app' -print -quit)"
+
+          ditto -c -k \
+            --sequesterRsrc \
+            --keepParent \
+            "$SIM" \
+            artifacts/RavenAssistant-simulator.zip
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: raven-assistant-builds
+          path: artifacts/
+          retention-days: 7
